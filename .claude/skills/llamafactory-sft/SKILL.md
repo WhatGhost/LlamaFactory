@@ -148,9 +148,9 @@ Once the model is decided:
 
 **Before the first command that uses the GPU** (SFT training, and later validation / export), **detect GPU status once, pick the device(s) to use, and reuse that exact choice** for SFT, validation, and export. Never assume a GPU is free — other jobs may already be using the machine. **Detect only once here** — do NOT re-detect before every run; the index/indices chosen now are reused for the whole workflow.
 
-1. **Detect GPUs and their load.** Try AMD/ROCm first, then NVIDIA:
+1. **Detect GPUs and their load.** Try AMD/ROCm first, then NVIDIA. Wrap the call in `timeout` so a live-refreshing monitor can never hang the agent (plain `amd-smi` without a subcommand only prints help and lacks the `VRAM_USAGE` / `GFX%` snapshot, so keep the `monitor` subcommand for the one-shot table):
    ```bash
-   amd-smi monitor 2>/dev/null || rocm-smi 2>/dev/null || nvidia-smi
+   timeout 10 amd-smi monitor 2>/dev/null || rocm-smi 2>/dev/null || nvidia-smi
    ```
    Read each GPU's **VRAM usage** and **utilization**. Treat a GPU as **free** when its VRAM usage is near-empty (e.g. ≲ 1 GB) and utilization is low (e.g. ≲ a few %). Also list any running training/inference processes if helpful (e.g. `pgrep -af "llamafactory-cli"`). Note whether the GPUs are **AMD Radeon** (e.g. detected via `amd-smi`/`rocm-smi`) — this affects the single-vs-multi recommendation below.
 2. **Decide which device(s) to use:**
@@ -229,8 +229,8 @@ If the user chose all-CLI:
    Use Bash with `run_in_background`, or `nohup ... &`.
    - **Beware the "fake completion" notification.** When you launch training with `nohup ... &` (or a backgrounded wrapper), the wrapper shell exits immediately and the harness may emit a `<task-notification> ... completed (exit code 0)` event — but the **real training process is still running** (it was detached). Do NOT treat that notification as "training finished". Training is only truly done when you confirm it via the actual process/log: `pgrep -f "llamafactory-cli train"` shows no process AND the log contains `Training completed` / a `train_runtime` line / the final `train metrics`. Until then, keep polling.
 3. **Periodically check task status and report to the user** (interval ≤ 100 seconds): tail the log file, check the process is alive (and optionally `amd-smi` / `nvidia-smi`). **Each status report must include BOTH the current run state AND the current loss.**
-   - Progress (`current step / total steps`) comes from the tqdm progress-bar lines, which use `\r`; convert `\r`→`\n` first, e.g. `tr '\r' '\n' < <log> | grep -oE "[0-9]+/[0-9]+ \[[^]]*\]" | tail -1`.
-   - Loss is logged as dict lines like `{'loss': '5.227', 'grad_norm': '4.634', 'learning_rate': '9.924e-05', 'epoch': '5'}` (emitted every `logging_steps`). Extract the latest with e.g. `grep -aoE "\{'loss':[^}]*\}" <log> | tail -1`, and report the latest `loss` value (optionally with `epoch`) to the user alongside the step progress.
+   - Progress (`current step / total steps`) comes from the tqdm progress-bar lines, which use `\r`; convert `\r`→`\n` first, e.g. `tr '\r' '\n' < "${RUN_DIR}/train.log" | grep -oE "[0-9]+/[0-9]+ \[[^]]*\]" | tail -1` (reference the log path directly — a literal `<log>` placeholder would be parsed by bash as a redirection operator and error out).
+   - Loss is logged as dict lines like `{'loss': '5.227', 'grad_norm': '4.634', 'learning_rate': '9.924e-05', 'epoch': '5'}` (emitted every `logging_steps`). Extract the latest with e.g. `grep -aoE "\{'loss':[^}]*\}" "${RUN_DIR}/train.log" | tail -1`, and report the latest `loss` value (optionally with `epoch`) to the user alongside the step progress.
 
 ---
 
